@@ -4,22 +4,17 @@ import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 import requests
+import json
+import os
+
 from datetime import datetime, timezone
 
-
-# --------------------------------------------------
-# Page config
-# --------------------------------------------------
 
 st.set_page_config(
     page_title="RetailTraders.nl | Oil Geopolitics Dashboard",
     layout="wide"
 )
 
-
-# --------------------------------------------------
-# Tickers
-# --------------------------------------------------
 
 TICKERS = {
     "Brent": "BZ=F",
@@ -36,6 +31,10 @@ TICKERS = {
     "DXY": "DX-Y.NYB",
     "US 10Y Yield": "^TNX",
 }
+
+
+ALERT_STATE_FILE = "discord_alert_state.json"
+ALERT_COOLDOWN_HOURS = 12
 
 
 ALERT_THRESHOLDS = {
@@ -56,10 +55,6 @@ ALERT_THRESHOLDS = {
     },
 }
 
-
-# --------------------------------------------------
-# Data loading
-# --------------------------------------------------
 
 @st.cache_data(ttl=900)
 def load_prices(tickers, period="6mo"):
@@ -87,13 +82,10 @@ def load_prices(tickers, period="6mo"):
     return data.dropna(how="all")
 
 
-# --------------------------------------------------
-# Helper functions
-# --------------------------------------------------
-
 def pct_change(df, days=5):
     if len(df) <= days:
         return pd.Series(index=df.columns, dtype=float)
+
     return (df.iloc[-1] / df.iloc[-days] - 1) * 100
 
 
@@ -151,7 +143,16 @@ def normalized_chart(data, selected_assets, title, height=420):
 
 def get_secret_bool(key, default=False):
     try:
-        return bool(st.secrets.get(key, default))
+        value = st.secrets.get(key, default)
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, str):
+            return value.lower() in ["true", "1", "yes", "on"]
+
+        return bool(value)
+
     except Exception:
         return default
 
@@ -197,7 +198,7 @@ def build_discord_message(active_signals, metrics):
             f"- DXY: {metrics['dxy_mom']:.2f}%",
             f"- US 10Y Yield: {metrics['yield_mom']:.2f}%",
             "",
-            "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal. Check : https://retailtraders.streamlit.app/",
+            "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal. Check https://retailtraders.streamlit.app/",
         ]
     )
 
@@ -227,17 +228,54 @@ def send_discord_alert(active_signals, metrics):
         return False, f"Discord request mislukt: {e}"
 
 
-def get_alert_key(active_signals, metrics):
+def load_alert_state():
+    if not os.path.exists(ALERT_STATE_FILE):
+        return {}
+
+    try:
+        with open(ALERT_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_alert_state(state):
+    try:
+        with open(ALERT_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+
+def get_alert_key(active_signals):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     signal_part = "|".join(sorted(active_signals))
-    score_part = round(metrics["regime_score"], 1)
 
-    return f"{today}:{signal_part}:{score_part}"
+    return f"{today}:{signal_part}"
 
 
-# --------------------------------------------------
-# Load and prepare data
-# --------------------------------------------------
+def should_send_alert(alert_key):
+    state = load_alert_state()
+    now = datetime.now(timezone.utc)
+
+    last_sent_raw = state.get(alert_key)
+
+    if not last_sent_raw:
+        return True
+
+    try:
+        last_sent = datetime.fromisoformat(last_sent_raw)
+        hours_since = (now - last_sent).total_seconds() / 3600
+        return hours_since >= ALERT_COOLDOWN_HOURS
+    except Exception:
+        return True
+
+
+def mark_alert_sent(alert_key):
+    state = load_alert_state()
+    state[alert_key] = datetime.now(timezone.utc).isoformat()
+    save_alert_state(state)
+
 
 prices = load_prices(TICKERS)
 
@@ -293,10 +331,6 @@ metrics = {
 }
 
 
-# --------------------------------------------------
-# Signal logic
-# --------------------------------------------------
-
 silent_accumulation = (
     abs(brent_mom) < 2
     and xle_spy_5d > 1
@@ -340,29 +374,18 @@ signals = {
 active_signals = [name for name, active in signals.items() if active]
 
 
-# --------------------------------------------------
-# Discord alerting - no public controls
-# --------------------------------------------------
-
 alerts_enabled = get_secret_bool("DISCORD_ALERTS_ENABLED", False)
 webhook_configured = get_discord_webhook_url() is not None
 
 if active_signals and alerts_enabled and webhook_configured:
-    alert_key = get_alert_key(active_signals, metrics)
+    alert_key = get_alert_key(active_signals)
 
-    if "last_discord_alert_key" not in st.session_state:
-        st.session_state["last_discord_alert_key"] = None
-
-    if st.session_state["last_discord_alert_key"] != alert_key:
+    if should_send_alert(alert_key):
         ok, _ = send_discord_alert(active_signals, metrics)
 
         if ok:
-            st.session_state["last_discord_alert_key"] = alert_key
+            mark_alert_sent(alert_key)
 
-
-# --------------------------------------------------
-# UI
-# --------------------------------------------------
 
 st.title("RetailTraders.nl | Oil Geopolitics Dashboard")
 st.caption("Focus: OPEC fracture risk, oil structure, energy equities, tankers, volatiliteit en inflatiestress.")
