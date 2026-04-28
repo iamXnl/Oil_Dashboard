@@ -6,7 +6,7 @@ import requests
 import plotly.graph_objects as go
 
 st.set_page_config(
-    page_title="RetailTraders Oil Geopolitics Dashboard",
+    page_title="RetailTraders.nl Oil Geopolitics Dashboard",
     layout="wide"
 )
 
@@ -49,7 +49,7 @@ def score_signal(value, bullish=True):
 
 prices = load_prices(TICKERS)
 
-st.title("Oil Geopolitics Signal Dashboard")
+st.title("Retailtraders.nl - Oil Geopolitics Signal Dashboard")
 st.caption("Focus: OPEC fracture risk, oil structure, energy equities, tankers, inflation stress.")
 
 latest = prices.iloc[-1]
