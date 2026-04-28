@@ -7,7 +7,7 @@ import requests
 from datetime import datetime, timezone
 
 st.set_page_config(
-    page_title="RetailTraders.nl |  Oil Geopolitics Dashboard",
+    page_title="RetailTraders.nl | Oil Geopolitics Dashboard",
     layout="wide"
 )
 
@@ -166,7 +166,7 @@ def build_discord_message(active_signals, metrics):
         f"- DXY: {metrics['dxy_mom']:.2f}%",
         f"- US 10Y Yield: {metrics['yield_mom']:.2f}%",
         "",
-        "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal. Check: https://retailtraders.streamlit.app/"
+        "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal. Check https://retailtraders.streamlit.app/"
     ])
 
     return "\n".join(lines)
