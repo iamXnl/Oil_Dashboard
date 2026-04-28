@@ -6,10 +6,20 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime, timezone
 
+
+# --------------------------------------------------
+# Page config
+# --------------------------------------------------
+
 st.set_page_config(
     page_title="RetailTraders.nl | Oil Geopolitics Dashboard",
     layout="wide"
 )
+
+
+# --------------------------------------------------
+# Tickers
+# --------------------------------------------------
 
 TICKERS = {
     "Brent": "BZ=F",
@@ -27,29 +37,29 @@ TICKERS = {
     "US 10Y Yield": "^TNX",
 }
 
+
 ALERT_THRESHOLDS = {
     "Silent Accumulation": {
-        "description": "Brent vlak, maar energie-aandelen en tankers lopen op. Mogelijke institutionele positionering.",
-        "severity": "opportunity",
+        "description": "Brent beweegt beperkt, maar energie-aandelen en tankers lopen op. Mogelijke institutionele positionering.",
     },
     "Fake Headline Move": {
-        "description": "Brent stijgt hard, maar aandelen en tankers bevestigen niet. Kans op emotionele headline move.",
-        "severity": "warning",
+        "description": "Brent stijgt hard, maar energie-aandelen en tankers bevestigen niet. Kans op emotionele headline move.",
     },
     "Hidden Supply Stress": {
         "description": "Brent, tankers en olievolatiliteit stijgen tegelijk. Mogelijke fysieke marktstress.",
-        "severity": "warning",
     },
     "Real Crisis Mode": {
         "description": "Brede bevestiging: olie, tankers, goud, energie-aandelen en volatiliteit lopen op.",
-        "severity": "critical",
     },
     "Inflation Stress": {
-        "description": "Olie, rente en dollar wijzen samen op inflatiedruk.",
-        "severity": "macro",
+        "description": "Olie, rente en dollar wijzen samen op oplopende inflatiedruk.",
     },
 }
 
+
+# --------------------------------------------------
+# Data loading
+# --------------------------------------------------
 
 @st.cache_data(ttl=900)
 def load_prices(tickers, period="6mo"):
@@ -77,6 +87,10 @@ def load_prices(tickers, period="6mo"):
     return data.dropna(how="all")
 
 
+# --------------------------------------------------
+# Helper functions
+# --------------------------------------------------
+
 def pct_change(df, days=5):
     if len(df) <= days:
         return pd.Series(index=df.columns, dtype=float)
@@ -86,6 +100,7 @@ def pct_change(df, days=5):
 def score_signal(value, bullish=True):
     if pd.isna(value):
         return 0
+
     raw = min(max(value, -2), 2) / 2
     return raw if bullish else -raw
 
@@ -106,13 +121,15 @@ def normalized_chart(data, selected_assets, title, height=420):
     fig = go.Figure()
 
     for col in normalized.columns:
-        fig.add_trace(go.Scatter(
-            x=normalized.index,
-            y=normalized[col],
-            mode="lines",
-            name=col,
-            line=dict(width=2)
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=normalized.index,
+                y=normalized[col],
+                mode="lines",
+                name=col,
+                line=dict(width=2),
+            )
+        )
 
     fig.update_layout(
         height=height,
@@ -124,17 +141,29 @@ def normalized_chart(data, selected_assets, title, height=420):
             yanchor="middle",
             y=0.5,
             xanchor="left",
-            x=1.02
+            x=1.02,
         ),
-        margin=dict(l=20, r=90, t=60, b=40)
+        margin=dict(l=20, r=90, t=60, b=40),
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 
-def get_discord_webhook_url():
+def get_secret_bool(key, default=False):
     try:
-        return st.secrets["DISCORD_WEBHOOK_URL"]
+        return bool(st.secrets.get(key, default))
+    except Exception:
+        return default
+
+
+def get_discord_webhook_url():
+    alerts_enabled = get_secret_bool("DISCORD_ALERTS_ENABLED", False)
+
+    if not alerts_enabled:
+        return None
+
+    try:
+        return st.secrets.get("DISCORD_WEBHOOK_URL", None)
     except Exception:
         return None
 
@@ -147,27 +176,30 @@ def build_discord_message(active_signals, metrics):
         "",
         f"**Tijd:** {timestamp}",
         "",
-        "**Actieve signalen:**"
+        "**Actieve signalen:**",
     ]
 
     for signal_name in active_signals:
-        meta = ALERT_THRESHOLDS.get(signal_name, {})
-        lines.append(f"- **{signal_name}**: {meta.get('description', '')}")
+        description = ALERT_THRESHOLDS.get(signal_name, {}).get("description", "")
+        lines.append(f"- **{signal_name}**: {description}")
 
-    lines.extend([
-        "",
-        "**Marktdata 5D:**",
-        f"- Brent: {metrics['brent_mom']:.2f}%",
-        f"- XLE vs SPY: {metrics['xle_spy_5d']:.2f}%",
-        f"- Tanker Basket: {metrics['tanker_mom']:.2f}%",
-        f"- OVX: {metrics['ovx_mom']:.2f}%",
-        f"- VIX: {metrics['vix_mom']:.2f}%",
-        f"- Gold: {metrics['gold_mom']:.2f}%",
-        f"- DXY: {metrics['dxy_mom']:.2f}%",
-        f"- US 10Y Yield: {metrics['yield_mom']:.2f}%",
-        "",
-        "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal. Check https://retailtraders.streamlit.app/"
-    ])
+    lines.extend(
+        [
+            "",
+            "**Marktdata 5D:**",
+            f"- Oil Geopolitics Score: {metrics['regime_score']:.1f}",
+            f"- Brent: {metrics['brent_mom']:.2f}%",
+            f"- XLE vs SPY: {metrics['xle_spy_5d']:.2f}%",
+            f"- Tanker Basket: {metrics['tanker_mom']:.2f}%",
+            f"- OVX: {metrics['ovx_mom']:.2f}%",
+            f"- VIX: {metrics['vix_mom']:.2f}%",
+            f"- Gold: {metrics['gold_mom']:.2f}%",
+            f"- DXY: {metrics['dxy_mom']:.2f}%",
+            f"- US 10Y Yield: {metrics['yield_mom']:.2f}%",
+            "",
+            "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal. Check : https://retailtraders.streamlit.app/",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -176,13 +208,11 @@ def send_discord_alert(active_signals, metrics):
     webhook_url = get_discord_webhook_url()
 
     if not webhook_url:
-        return False, "Geen Discord webhook ingesteld in Streamlit Secrets."
-
-    message = build_discord_message(active_signals, metrics)
+        return False, "Discord alerts zijn niet geconfigureerd of uitgeschakeld."
 
     payload = {
         "username": "RetailTraders Oil Monitor",
-        "content": message
+        "content": build_discord_message(active_signals, metrics),
     }
 
     try:
@@ -190,6 +220,7 @@ def send_discord_alert(active_signals, metrics):
 
         if response.status_code in [200, 204]:
             return True, "Discord alert verzonden."
+
         return False, f"Discord fout: HTTP {response.status_code} - {response.text}"
 
     except Exception as e:
@@ -199,9 +230,14 @@ def send_discord_alert(active_signals, metrics):
 def get_alert_key(active_signals, metrics):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     signal_part = "|".join(sorted(active_signals))
-    metric_part = round(metrics["regime_score"], 1)
-    return f"{today}:{signal_part}:{metric_part}"
+    score_part = round(metrics["regime_score"], 1)
 
+    return f"{today}:{signal_part}:{score_part}"
+
+
+# --------------------------------------------------
+# Load and prepare data
+# --------------------------------------------------
 
 prices = load_prices(TICKERS)
 
@@ -217,10 +253,12 @@ weekly = pct_change(prices, 5)
 xle_spy_ratio = prices["XLE"] / prices["SPY"]
 xle_spy_5d = (xle_spy_ratio.iloc[-1] / xle_spy_ratio.iloc[-5] - 1) * 100
 
-tanker_mom = np.nanmean([
-    weekly.get("Frontline", np.nan),
-    weekly.get("International Seaways", np.nan)
-])
+tanker_mom = np.nanmean(
+    [
+        weekly.get("Frontline", np.nan),
+        weekly.get("International Seaways", np.nan),
+    ]
+)
 
 brent_mom = weekly.get("Brent", 0)
 ovx_mom = weekly.get("OVX", 0)
@@ -237,7 +275,7 @@ regime_score = round(
     + 8 * score_signal(gold_mom)
     + 6 * score_signal(ovx_mom)
     + 4 * score_signal(vix_mom),
-    1
+    1,
 )
 
 regime_score = max(0, min(100, regime_score))
@@ -253,6 +291,11 @@ metrics = {
     "dxy_mom": dxy_mom,
     "yield_mom": yield_mom,
 }
+
+
+# --------------------------------------------------
+# Signal logic
+# --------------------------------------------------
 
 silent_accumulation = (
     abs(brent_mom) < 2
@@ -296,7 +339,32 @@ signals = {
 
 active_signals = [name for name, active in signals.items() if active]
 
-st.title("RetailTraders.nl - Oil Geopolitics Signal Dashboard")
+
+# --------------------------------------------------
+# Discord alerting - no public controls
+# --------------------------------------------------
+
+alerts_enabled = get_secret_bool("DISCORD_ALERTS_ENABLED", False)
+webhook_configured = get_discord_webhook_url() is not None
+
+if active_signals and alerts_enabled and webhook_configured:
+    alert_key = get_alert_key(active_signals, metrics)
+
+    if "last_discord_alert_key" not in st.session_state:
+        st.session_state["last_discord_alert_key"] = None
+
+    if st.session_state["last_discord_alert_key"] != alert_key:
+        ok, _ = send_discord_alert(active_signals, metrics)
+
+        if ok:
+            st.session_state["last_discord_alert_key"] = alert_key
+
+
+# --------------------------------------------------
+# UI
+# --------------------------------------------------
+
+st.title("RetailTraders.nl | Oil Geopolitics Dashboard")
 st.caption("Focus: OPEC fracture risk, oil structure, energy equities, tankers, volatiliteit en inflatiestress.")
 
 col1, col2, col3, col4 = st.columns(4)
@@ -320,51 +388,55 @@ left, right = st.columns([2, 1])
 with left:
     st.subheader("Market Structure")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Oil & Gold",
-        "Energy Equities",
-        "Volatility",
-        "XLE vs SPY"
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(
+        [
+            "Oil & Gold",
+            "Energy Equities",
+            "Volatility",
+            "XLE vs SPY",
+        ]
+    )
 
     with tab1:
         normalized_chart(
             prices,
             ["Brent", "WTI", "Gold", "DXY"],
-            "Oil, Gold & Dollar"
+            "Oil, Gold & Dollar",
         )
 
     with tab2:
         normalized_chart(
             prices,
             ["XLE", "Exxon", "Shell", "Frontline", "International Seaways"],
-            "Energy Equities & Tankers"
+            "Energy Equities & Tankers",
         )
 
     with tab3:
         normalized_chart(
             prices,
             ["OVX", "VIX"],
-            "Oil Volatility vs Equity Volatility"
+            "Oil Volatility vs Equity Volatility",
         )
 
     with tab4:
         ratio_fig = go.Figure()
 
-        ratio_fig.add_trace(go.Scatter(
-            x=xle_spy_ratio.index,
-            y=xle_spy_ratio,
-            mode="lines",
-            name="XLE / SPY",
-            line=dict(width=2)
-        ))
+        ratio_fig.add_trace(
+            go.Scatter(
+                x=xle_spy_ratio.index,
+                y=xle_spy_ratio,
+                mode="lines",
+                name="XLE / SPY",
+                line=dict(width=2),
+            )
+        )
 
         ratio_fig.update_layout(
             height=420,
             title="Energy Sector Relative Strength vs S&P 500",
             yaxis_title="XLE / SPY Ratio",
             hovermode="x unified",
-            margin=dict(l=20, r=40, t=60, b=40)
+            margin=dict(l=20, r=40, t=60, b=40),
         )
 
         st.plotly_chart(ratio_fig, use_container_width=True)
@@ -380,81 +452,23 @@ with right:
             st.success(f"Neutral: {name}")
 
     st.divider()
-    st.subheader("Discord Alerts")
 
-    webhook_configured = get_discord_webhook_url() is not None
-
-    if webhook_configured:
-        st.success("Discord webhook is ingesteld.")
+    if alerts_enabled and webhook_configured:
+        st.caption("Discord alerts: actief")
     else:
-        st.warning("Geen Discord webhook gevonden in Streamlit Secrets.")
+        st.caption("Discord alerts: niet actief")
 
-    auto_alerts_enabled = st.toggle(
-        "Automatische Discord alerts aan",
-        value=True
-    )
-
-    if active_signals:
-        st.warning(f"Actieve signalen: {', '.join(active_signals)}")
-
-        alert_key = get_alert_key(active_signals, metrics)
-
-        if "last_discord_alert_key" not in st.session_state:
-            st.session_state["last_discord_alert_key"] = None
-
-        if auto_alerts_enabled and st.session_state["last_discord_alert_key"] != alert_key:
-            ok, msg = send_discord_alert(active_signals, metrics)
-
-            if ok:
-                st.session_state["last_discord_alert_key"] = alert_key
-                st.success(msg)
-            else:
-                st.warning(msg)
-
-        if st.button("Verstuur test/handmatige Discord alert"):
-            ok, msg = send_discord_alert(active_signals, metrics)
-            if ok:
-                st.success(msg)
-            else:
-                st.warning(msg)
-    else:
-        st.info("Geen actieve signalen. Er wordt geen Discord alert verstuurd.")
-
-        if st.button("Verstuur Discord testbericht"):
-            test_signals = ["Test Alert"]
-            test_metrics = metrics.copy()
-            webhook_url = get_discord_webhook_url()
-
-            if not webhook_url:
-                st.warning("Geen Discord webhook ingesteld.")
-            else:
-                payload = {
-                    "username": "RetailTraders Oil Monitor",
-                    "content": (
-                        "✅ **RetailTraders Oil Dashboard Testbericht**\n\n"
-                        "De Discord webhook werkt correct.\n\n"
-                        "Taal: Nederlands\n"
-                        "Status: operationeel"
-                    )
-                }
-
-                try:
-                    response = requests.post(webhook_url, json=payload, timeout=10)
-                    if response.status_code in [200, 204]:
-                        st.success("Testbericht verzonden.")
-                    else:
-                        st.warning(f"Discord fout: HTTP {response.status_code} - {response.text}")
-                except Exception as e:
-                    st.warning(f"Discord request mislukt: {e}")
 
 st.divider()
 
 st.subheader("Latest Market Snapshot")
 
-snapshot = pd.DataFrame({
-    "Laatste waarde": latest,
-    "5D %": weekly
-}).round(2)
+snapshot = pd.DataFrame(
+    {
+        "Laatste waarde": latest,
+        "5D %": weekly,
+    }
+).round(2)
 
 st.dataframe(snapshot, use_container_width=True)
 
@@ -462,14 +476,18 @@ st.divider()
 
 st.subheader("Data Quality Check")
 
-data_quality = pd.DataFrame({
-    "Ticker Name": prices.columns,
-    "Data Points": [prices[col].dropna().shape[0] for col in prices.columns],
-    "Latest Value": [
-        prices[col].dropna().iloc[-1] if prices[col].dropna().shape[0] > 0 else np.nan
-        for col in prices.columns
-    ],
-    "Missing %": [(prices[col].isna().mean() * 100) for col in prices.columns],
-}).round(2)
+data_quality = pd.DataFrame(
+    {
+        "Ticker Name": prices.columns,
+        "Data Points": [prices[col].dropna().shape[0] for col in prices.columns],
+        "Latest Value": [
+            prices[col].dropna().iloc[-1]
+            if prices[col].dropna().shape[0] > 0
+            else np.nan
+            for col in prices.columns
+        ],
+        "Missing %": [(prices[col].isna().mean() * 100) for col in prices.columns],
+    }
+).round(2)
 
 st.dataframe(data_quality, use_container_width=True)
