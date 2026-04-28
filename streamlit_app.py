@@ -167,12 +167,14 @@ def build_discord_message(active_signals, metrics):
         f"- US 10Y Yield: {metrics['yield_mom']:.2f}%",
         "",
         "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal."
+        "",
+        "**Check Dashboard: https://retailtraders.streamlit.app/ "
     ])
 
     return "\n".join(lines)
 
 
-def send_discord_alert(active_signals, metrics):
+def send_discord_alert(active_signals, metrics):"",
     webhook_url = get_discord_webhook_url()
 
     if not webhook_url:
