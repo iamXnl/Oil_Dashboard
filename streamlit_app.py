@@ -3,11 +3,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-import requests
-import json
-import os
-
-from datetime import datetime, timezone
 
 
 st.set_page_config(
@@ -31,10 +26,6 @@ TICKERS = {
     "DXY": "DX-Y.NYB",
     "US 10Y Yield": "^TNX",
 }
-
-
-ALERT_STATE_FILE = "discord_alert_state.json"
-ALERT_COOLDOWN_HOURS = 12
 
 
 ALERT_THRESHOLDS = {
@@ -141,142 +132,6 @@ def normalized_chart(data, selected_assets, title, height=420):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def get_secret_bool(key, default=False):
-    try:
-        value = st.secrets.get(key, default)
-
-        if isinstance(value, bool):
-            return value
-
-        if isinstance(value, str):
-            return value.lower() in ["true", "1", "yes", "on"]
-
-        return bool(value)
-
-    except Exception:
-        return default
-
-
-def get_discord_webhook_url():
-    alerts_enabled = get_secret_bool("DISCORD_ALERTS_ENABLED", False)
-
-    if not alerts_enabled:
-        return None
-
-    try:
-        return st.secrets.get("DISCORD_WEBHOOK_URL", None)
-    except Exception:
-        return None
-
-
-def build_discord_message(active_signals, metrics):
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-    lines = [
-        "🚨 **RetailTraders Oil Dashboard Alert**",
-        "",
-        f"**Tijd:** {timestamp}",
-        "",
-        "**Actieve signalen:**",
-    ]
-
-    for signal_name in active_signals:
-        description = ALERT_THRESHOLDS.get(signal_name, {}).get("description", "")
-        lines.append(f"- **{signal_name}**: {description}")
-
-    lines.extend(
-        [
-            "",
-            "**Marktdata 5D:**",
-            f"- Oil Geopolitics Score: {metrics['regime_score']:.1f}",
-            f"- Brent: {metrics['brent_mom']:.2f}%",
-            f"- XLE vs SPY: {metrics['xle_spy_5d']:.2f}%",
-            f"- Tanker Basket: {metrics['tanker_mom']:.2f}%",
-            f"- OVX: {metrics['ovx_mom']:.2f}%",
-            f"- VIX: {metrics['vix_mom']:.2f}%",
-            f"- Gold: {metrics['gold_mom']:.2f}%",
-            f"- DXY: {metrics['dxy_mom']:.2f}%",
-            f"- US 10Y Yield: {metrics['yield_mom']:.2f}%",
-            "",
-            "**Interpretatie:** Dit is een kwantitatief waarschuwingssignaal, geen automatisch koop- of verkoopsignaal. Check https://retailtraders.streamlit.app/",
-        ]
-    )
-
-    return "\n".join(lines)
-
-
-def send_discord_alert(active_signals, metrics):
-    webhook_url = get_discord_webhook_url()
-
-    if not webhook_url:
-        return False, "Discord alerts zijn niet geconfigureerd of uitgeschakeld."
-
-    payload = {
-        "username": "RetailTraders Oil Monitor",
-        "content": build_discord_message(active_signals, metrics),
-    }
-
-    try:
-        response = requests.post(webhook_url, json=payload, timeout=10)
-
-        if response.status_code in [200, 204]:
-            return True, "Discord alert verzonden."
-
-        return False, f"Discord fout: HTTP {response.status_code} - {response.text}"
-
-    except Exception as e:
-        return False, f"Discord request mislukt: {e}"
-
-
-def load_alert_state():
-    if not os.path.exists(ALERT_STATE_FILE):
-        return {}
-
-    try:
-        with open(ALERT_STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_alert_state(state):
-    try:
-        with open(ALERT_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f)
-    except Exception:
-        pass
-
-
-def get_alert_key(active_signals):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    signal_part = "|".join(sorted(active_signals))
-
-    return f"{today}:{signal_part}"
-
-
-def should_send_alert(alert_key):
-    state = load_alert_state()
-    now = datetime.now(timezone.utc)
-
-    last_sent_raw = state.get(alert_key)
-
-    if not last_sent_raw:
-        return True
-
-    try:
-        last_sent = datetime.fromisoformat(last_sent_raw)
-        hours_since = (now - last_sent).total_seconds() / 3600
-        return hours_since >= ALERT_COOLDOWN_HOURS
-    except Exception:
-        return True
-
-
-def mark_alert_sent(alert_key):
-    state = load_alert_state()
-    state[alert_key] = datetime.now(timezone.utc).isoformat()
-    save_alert_state(state)
-
-
 prices = load_prices(TICKERS)
 
 if prices.empty:
@@ -318,18 +173,6 @@ regime_score = round(
 
 regime_score = max(0, min(100, regime_score))
 
-metrics = {
-    "regime_score": regime_score,
-    "brent_mom": brent_mom,
-    "xle_spy_5d": xle_spy_5d,
-    "tanker_mom": tanker_mom,
-    "ovx_mom": ovx_mom,
-    "vix_mom": vix_mom,
-    "gold_mom": gold_mom,
-    "dxy_mom": dxy_mom,
-    "yield_mom": yield_mom,
-}
-
 
 silent_accumulation = (
     abs(brent_mom) < 2
@@ -370,21 +213,6 @@ signals = {
     "Real Crisis Mode": real_crisis,
     "Inflation Stress": inflation_stress,
 }
-
-active_signals = [name for name, active in signals.items() if active]
-
-
-alerts_enabled = get_secret_bool("DISCORD_ALERTS_ENABLED", False)
-webhook_configured = get_discord_webhook_url() is not None
-
-if active_signals and alerts_enabled and webhook_configured:
-    alert_key = get_alert_key(active_signals)
-
-    if should_send_alert(alert_key):
-        ok, _ = send_discord_alert(active_signals, metrics)
-
-        if ok:
-            mark_alert_sent(alert_key)
 
 
 st.title("RetailTraders.nl | Oil Geopolitics Dashboard")
@@ -475,11 +303,7 @@ with right:
             st.success(f"Neutral: {name}")
 
     st.divider()
-
-    if alerts_enabled and webhook_configured:
-        st.caption("Discord alerts: actief")
-    else:
-        st.caption("Discord alerts: niet actief")
+    st.caption("Discord alerts: uitgevoerd via GitHub Actions")
 
 
 st.divider()
