@@ -25,6 +25,7 @@ TICKERS = {
     "US 10Y Yield": "^TNX",
 }
 
+
 @st.cache_data(ttl=900)
 def load_prices(tickers, period="6mo"):
     raw = yf.download(
@@ -32,41 +33,90 @@ def load_prices(tickers, period="6mo"):
         period=period,
         interval="1d",
         auto_adjust=True,
-        progress=False
+        progress=False,
+        group_by="ticker",
+        threads=True,
     )
 
-    if isinstance(raw.columns, pd.MultiIndex):
-        data = raw["Close"]
-    else:
-        data = raw[["Close"]]
+    data = pd.DataFrame()
 
-    reverse_map = {v: k for k, v in tickers.items()}
-    data = data.rename(columns=reverse_map)
+    for name, ticker in tickers.items():
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                data[name] = raw[ticker]["Close"]
+            else:
+                data[name] = raw["Close"]
+        except Exception:
+            data[name] = np.nan
 
     return data.dropna(how="all")
 
 
 def pct_change(df, days=5):
+    if len(df) <= days:
+        return pd.Series(index=df.columns, dtype=float)
     return (df.iloc[-1] / df.iloc[-days] - 1) * 100
 
 
 def score_signal(value, bullish=True):
     if pd.isna(value):
         return 0
-
     raw = min(max(value, -2), 2) / 2
     return raw if bullish else -raw
 
 
+def normalized_chart(data, selected_assets, title, height=420):
+    valid_assets = [
+        asset for asset in selected_assets
+        if asset in data.columns and data[asset].dropna().shape[0] > 5
+    ]
+
+    if not valid_assets:
+        st.warning(f"No valid data available for {title}")
+        return
+
+    clean = data[valid_assets].ffill().dropna(how="all")
+    normalized = clean / clean.iloc[0] * 100
+
+    fig = go.Figure()
+
+    for col in normalized.columns:
+        fig.add_trace(go.Scatter(
+            x=normalized.index,
+            y=normalized[col],
+            mode="lines",
+            name=col,
+            line=dict(width=2)
+        ))
+
+    fig.update_layout(
+        height=height,
+        title=title,
+        yaxis_title="Indexed to 100",
+        hovermode="x unified",
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.02
+        ),
+        margin=dict(l=20, r=90, t=60, b=40)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
 prices = load_prices(TICKERS)
 
-st.title("Retailtraders.nl - Oil Geopolitics Signal Dashboard")
-st.caption("Focus: OPEC fracture risk, oil structure, energy equities, tankers, volatility, inflation stress.")
+if prices.empty:
+    st.error("No market data loaded. Check ticker symbols or yfinance availability.")
+    st.stop()
 
-latest = prices.iloc[-1]
-weekly = pct_change(prices, 5)
+latest = prices.ffill().iloc[-1]
+weekly = pct_change(prices.ffill(), 5)
 
-xle_spy_ratio = prices["XLE"] / prices["SPY"]
+xle_spy_ratio = prices["XLE"].ffill() / prices["SPY"].ffill()
 xle_spy_5d = (xle_spy_ratio.iloc[-1] / xle_spy_ratio.iloc[-5] - 1) * 100
 
 tanker_mom = np.nanmean([
@@ -94,6 +144,9 @@ regime_score = round(
 
 regime_score = max(0, min(100, regime_score))
 
+st.title("RetailTraders.nl - Oil Geopolitics Signal Dashboard")
+st.caption("Focus: OPEC fracture risk, oil structure, energy equities, tankers, volatility, inflation stress.")
+
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("Oil Geopolitics Score", regime_score)
@@ -113,32 +166,56 @@ st.divider()
 left, right = st.columns([2, 1])
 
 with left:
-    selected = st.multiselect(
-        "Chart assets",
-        list(prices.columns),
-        default=["Brent", "WTI", "XLE", "Exxon", "Shell", "Gold", "OVX", "VIX"]
-    )
+    st.subheader("Market Structure")
 
-    fig = go.Figure()
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Oil & Gold",
+        "Energy Equities",
+        "Volatility",
+        "XLE vs SPY"
+    ])
 
-    normalized = prices[selected] / prices[selected].iloc[0] * 100
+    with tab1:
+        normalized_chart(
+            prices,
+            ["Brent", "WTI", "Gold", "DXY"],
+            "Oil, Gold & Dollar"
+        )
 
-    for col in normalized.columns:
-        fig.add_trace(go.Scatter(
-            x=normalized.index,
-            y=normalized[col],
+    with tab2:
+        normalized_chart(
+            prices,
+            ["XLE", "Exxon", "Shell", "Frontline", "International Seaways"],
+            "Energy Equities & Tankers"
+        )
+
+    with tab3:
+        normalized_chart(
+            prices,
+            ["OVX", "VIX"],
+            "Oil Volatility vs Equity Volatility"
+        )
+
+    with tab4:
+        ratio_fig = go.Figure()
+
+        ratio_fig.add_trace(go.Scatter(
+            x=xle_spy_ratio.index,
+            y=xle_spy_ratio,
             mode="lines",
-            name=col
+            name="XLE / SPY",
+            line=dict(width=2)
         ))
 
-    fig.update_layout(
-        height=500,
-        title="Normalized Performance",
-        yaxis_title="Indexed to 100",
-        hovermode="x unified"
-    )
+        ratio_fig.update_layout(
+            height=420,
+            title="Energy Sector Relative Strength vs S&P 500",
+            yaxis_title="XLE / SPY Ratio",
+            hovermode="x unified",
+            margin=dict(l=20, r=40, t=60, b=40)
+        )
 
-    st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(ratio_fig, use_container_width=True)
 
 with right:
     st.subheader("Signal Engine")
@@ -191,28 +268,6 @@ with right:
 
 st.divider()
 
-st.subheader("XLE vs SPY Ratio")
-
-ratio_fig = go.Figure()
-
-ratio_fig.add_trace(go.Scatter(
-    x=xle_spy_ratio.index,
-    y=xle_spy_ratio,
-    mode="lines",
-    name="XLE / SPY"
-))
-
-ratio_fig.update_layout(
-    height=350,
-    title="Energy Sector Relative Strength vs S&P 500",
-    yaxis_title="XLE / SPY Ratio",
-    hovermode="x unified"
-)
-
-st.plotly_chart(ratio_fig, use_container_width=True)
-
-st.divider()
-
 st.subheader("Latest Market Snapshot")
 
 snapshot = pd.DataFrame({
@@ -221,3 +276,19 @@ snapshot = pd.DataFrame({
 }).round(2)
 
 st.dataframe(snapshot, use_container_width=True)
+
+st.divider()
+
+st.subheader("Data Quality Check")
+
+data_quality = pd.DataFrame({
+    "Ticker Name": prices.columns,
+    "Data Points": [prices[col].dropna().shape[0] for col in prices.columns],
+    "Latest Value": [
+        prices[col].dropna().iloc[-1] if prices[col].dropna().shape[0] > 0 else np.nan
+        for col in prices.columns
+    ],
+    "Missing %": [(prices[col].isna().mean() * 100) for col in prices.columns],
+}).round(2)
+
+st.dataframe(data_quality, use_container_width=True)
